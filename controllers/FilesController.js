@@ -4,13 +4,16 @@ import fs from 'fs';
 import path from 'path';
 import { promisify } from 'util';
 import { v4 as uuidv4 } from 'uuid';
+import mime from 'mime-types';
+import Queue from 'bull';
 import dbClient from '../utils/db';
 import redisClient from '../utils/redis';
-import Queue from 'bull';
 
 const mkdir = promisify(fs.mkdir);
 const writeFile = promisify(fs.writeFile);
 const access = promisify(fs.access);
+const stat = promisify(fs.stat);
+const readFile = promisify(fs.readFile);
 
 const fileQueue = new Queue('fileQueue');
 
@@ -75,7 +78,6 @@ class FilesController {
 
     const filename = uuidv4();
     const filePath = path.join(folderPath, filename);
-
     const buffer = Buffer.from(data, 'base64');
     await writeFile(filePath, buffer);
 
@@ -155,7 +157,6 @@ class FilesController {
 
     return res.status(200).json(response);
   }
-}
 
   static async putPublish(req, res) {
     const token = req.header('X-Token');
@@ -176,10 +177,7 @@ class FilesController {
     const file = await dbClient.db.collection('files').findOne({ _id: objectId, userId: ObjectId(userId) });
     if (!file) return res.status(404).json({ error: 'Not found' });
 
-    await dbClient.db.collection('files').updateOne(
-      { _id: objectId },
-      { $set: { isPublic: true } },
-    );
+    await dbClient.db.collection('files').updateOne({ _id: objectId }, { $set: { isPublic: true } });
 
     return res.status(200).json({
       id: file._id.toString(),
@@ -210,10 +208,7 @@ class FilesController {
     const file = await dbClient.db.collection('files').findOne({ _id: objectId, userId: ObjectId(userId) });
     if (!file) return res.status(404).json({ error: 'Not found' });
 
-    await dbClient.db.collection('files').updateOne(
-      { _id: objectId },
-      { $set: { isPublic: false } },
-    );
+    await dbClient.db.collection('files').updateOne({ _id: objectId }, { $set: { isPublic: false } });
 
     return res.status(200).json({
       id: file._id.toString(),
@@ -224,5 +219,55 @@ class FilesController {
       parentId: file.parentId === 0 ? 0 : file.parentId.toString(),
     });
   }
+
+  static async getFile(req, res) {
+    const { id } = req.params;
+    const size = req.query.size;
+
+    let objectId;
+    try {
+      objectId = ObjectId(id);
+    } catch {
+      return res.status(404).json({ error: 'Not found' });
+    }
+
+    const file = await dbClient.db.collection('files').findOne({ _id: objectId });
+    if (!file) return res.status(404).json({ error: 'Not found' });
+
+    const token = req.header('X-Token');
+    let ownerAccess = false;
+
+    if (token) {
+      const userId = await redisClient.get(`auth_${token}`);
+      if (userId && userId === file.userId.toString()) {
+        ownerAccess = true;
+      }
+    }
+
+    if (!file.isPublic && !ownerAccess) {
+      return res.status(404).json({ error: 'Not found' });
+    }
+
+    if (file.type === 'folder') {
+      return res.status(400).json({ error: "A folder doesn't have content" });
+    }
+
+    let localPath = file.localPath;
+    if (size && ['100', '250', '500'].includes(size)) {
+      localPath = `${localPath}_${size}`;
+    }
+
+    try {
+      await stat(localPath);
+    } catch {
+      return res.status(404).json({ error: 'Not found' });
+    }
+
+    const fileData = await readFile(localPath);
+    const mimeType = mime.lookup(file.name) || 'application/octet-stream';
+    res.setHeader('Content-Type', mimeType);
+    return res.status(200).send(fileData);
+  }
+}
 
 export default FilesController;
