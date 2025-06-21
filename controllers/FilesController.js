@@ -157,4 +157,72 @@ class FilesController {
   }
 }
 
+  static async putPublish(req, res) {
+    const token = req.header('X-Token');
+    const { id } = req.params;
+
+    if (!token) return res.status(401).json({ error: 'Unauthorized' });
+
+    const userId = await redisClient.get(`auth_${token}`);
+    if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+
+    let objectId;
+    try {
+      objectId = ObjectId(id);
+    } catch {
+      return res.status(404).json({ error: 'Not found' });
+    }
+
+    const file = await dbClient.db.collection('files').findOne({ _id: objectId, userId: ObjectId(userId) });
+    if (!file) return res.status(404).json({ error: 'Not found' });
+
+    await dbClient.db.collection('files').updateOne(
+      { _id: objectId },
+      { $set: { isPublic: true } },
+    );
+
+    return res.status(200).json({
+      id: file._id.toString(),
+      userId: file.userId.toString(),
+      name: file.name,
+      type: file.type,
+      isPublic: true,
+      parentId: file.parentId === 0 ? 0 : file.parentId.toString(),
+    });
+  }
+
+  static async putUnpublish(req, res) {
+    const token = req.header('X-Token');
+    const { id } = req.params;
+
+    if (!token) return res.status(401).json({ error: 'Unauthorized' });
+
+    const userId = await redisClient.get(`auth_${token}`);
+    if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+
+    let objectId;
+    try {
+      objectId = ObjectId(id);
+    } catch {
+      return res.status(404).json({ error: 'Not found' });
+    }
+
+    const file = await dbClient.db.collection('files').findOne({ _id: objectId, userId: ObjectId(userId) });
+    if (!file) return res.status(404).json({ error: 'Not found' });
+
+    await dbClient.db.collection('files').updateOne(
+      { _id: objectId },
+      { $set: { isPublic: false } },
+    );
+
+    return res.status(200).json({
+      id: file._id.toString(),
+      userId: file.userId.toString(),
+      name: file.name,
+      type: file.type,
+      isPublic: false,
+      parentId: file.parentId === 0 ? 0 : file.parentId.toString(),
+    });
+  }
+
 export default FilesController;
